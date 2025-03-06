@@ -9,5 +9,67 @@
 </head>
 <html>
 <body>
+  <h1>Business Card Scanner</h1>
+  <button onclick="readImage()">Read an Image</button>
+  <input style="display:none;" type="file" id="file" onchange="loadImageFromFile();" accept=".jpg,.jpeg,.png,.bmp" />
+  <button onclick="startDetection()">Start Detection</button>
+  <img id="image"/>
+  <div id="cameraViewContainer" style="width: 50vw; height: 45vh; margin-top: 10px; display: none"></div>
+  <script src="https://cdn.jsdelivr.net/npm/dynamsoft-capture-vision-bundle@2.6.1000/dist/dcv.bundle.js"></script>
+  <script>
+    const cameraViewContainer = document.querySelector(
+      "#cameraViewContainer"
+    );
+    let router;
+    let cameraEnhancer;
+    Dynamsoft.License.LicenseManager.initLicense("DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9");
+    Dynamsoft.Core.CoreModule.loadWasm(["DLR"]);
+    init();
+    async function init(){
+      router = await Dynamsoft.CVR.CaptureVisionRouter.createInstance();
+      let view = await Dynamsoft.DCE.CameraView.createInstance();
+      cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(
+        view
+      );
+      cameraViewContainer.append(view.getUIElement());
+      router.setInput(cameraEnhancer);
+    }
+
+    async function startDetection() {
+      cameraViewContainer.style.display = "block";
+      await cameraEnhancer.open();
+      await router.startCapturing("RecognizeTextLines_Default");
+    };
+
+    function readImage(){
+      document.getElementById("file").click();
+    }
+
+    function loadImageFromFile(){
+      let fileInput = document.getElementById("file");
+      let files = fileInput.files;
+      if (files.length == 0) {
+        return;
+      }
+      let file = files[0];
+      fileReader = new FileReader();
+      fileReader.onload = function(e){
+        let img = document.getElementById("image");
+        img.onload = function(){
+          capture(img);
+        }
+        img.src = e.target.result;
+      };
+      fileReader.onerror = function () {
+        console.warn('oops, something went wrong.');
+      };
+      fileReader.readAsDataURL(file);
+    }
+
+    async function capture(source){
+      let result = await router.capture(source,"RecognizeTextLines_Default");
+      console.log(result);
+    }
+  </script>
 </body>
 </html>
