@@ -5,71 +5,149 @@
   <title>Business Card Scanner</title>
   <script type="text/javascript" src="vcf.js"></script>
   <style>
+    #enhancerUIContainer {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: white;
+    }
+
+    .dce-video-container {
+      width: 100%;
+      height: 100%;
+    }
+
+    .close-button {
+      position: absolute;
+      top: 0;
+      right: 0;
+    }
+
+    .modal {
+      display: flex;
+      align-items: flex-start;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      min-width: 250px;
+      min-height: 150px;
+      border: 1px solid gray;
+      border-radius: 5px;
+      background: white;
+      z-index: 9999;
+      padding: 10px;
+      visibility: hidden;
+    }
+
+    .progress-modal {
+      align-items: center;
+      text-align: center;
+      justify-content: center;
+      min-height: 50px;
+      max-height: 100px;
+    }
+
+    .progress-modal.active {
+      visibility: inherit;
+    }
   </style>
 </head>
 <html>
 <body>
   <h1>Business Card Scanner</h1>
-  <button onclick="readImage()">Read an Image</button>
-  <input style="display:none;" type="file" id="file" onchange="loadImageFromFile();" accept=".jpg,.jpeg,.png,.bmp" />
+  <div>
+    <label>
+      Camera:
+      <select id="select-camera"></select>
+    </label>
+  </div>
+  <div>
+    <label>
+      Resolution:
+      <select id="select-resolution">
+        <option value="640x480">640x480</option>
+        <option value="1280x720">1280x720</option>
+        <option value="1920x1080" selected>1920x1080</option>
+        <option value="3840x2160">3840x2160</option>
+      </select>
+    </label>
+  </div>
   <button onclick="startDetection()">Start Detection</button>
   <img id="image"/>
-  <div id="cameraViewContainer" style="width: 50vw; height: 45vh; margin-top: 10px; display: none"></div>
+  <div id="enhancerUIContainer">
+    <div class="dce-video-container"></div>
+    <button class="close-button">Close</button>
+  </div>
+  <div class="modal progress-modal"></div>
   <script src="https://cdn.jsdelivr.net/npm/dynamsoft-capture-vision-bundle@2.6.1000/dist/dcv.bundle.js"></script>
   <script>
-    const cameraViewContainer = document.querySelector(
-      "#cameraViewContainer"
-    );
+    let dcvLicense = "DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9";
+    let cameraViewContainer = document.getElementById("enhancerUIContainer")
     let router;
     let cameraEnhancer;
-    Dynamsoft.License.LicenseManager.initLicense("DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9");
-    Dynamsoft.Core.CoreModule.loadWasm(["DLR"]);
+    let drawingLayer;
     init();
     async function init(){
+      showProgress("Loading...");
+      Dynamsoft.License.LicenseManager.initLicense(dcvLicense);
+      Dynamsoft.Core.CoreModule.loadWasm(["DDN","DBR"]);
       router = await Dynamsoft.CVR.CaptureVisionRouter.createInstance();
-      let view = await Dynamsoft.DCE.CameraView.createInstance();
-      cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(
-        view
-      );
-      cameraViewContainer.append(view.getUIElement());
-      router.setInput(cameraEnhancer);
+      let cameraView = await Dynamsoft.DCE.CameraView.createInstance(cameraViewContainer);
+      drawingLayer = cameraView.createDrawingLayer();
+      let newStyleId = Dynamsoft.DCE.DrawingStyleManager.createDrawingStyle({
+          fillStyle: "rgba(100, 75, 245, 0.3)",
+          lineWidth: 5,
+          paintMode: "strokeAndFill",
+          strokeStyle: "rgba(73, 173, 245, 1)"
+      });
+      drawingLayer.setDefaultStyle(newStyleId);
+      cameraEnhancer = await Dynamsoft.DCE.CameraEnhancer.createInstance(cameraView);
+      imageEditorView = await Dynamsoft.DCE.ImageEditorView.createInstance(cameraViewContainer);
+      editorDrawingLayer = imageEditorView.createDrawingLayer();
+      await listCameras();
+      document.getElementsByClassName("close-button")[0].addEventListener("click",function(){
+        stopDetection();
+      })
+      hideProgress();
+    }
+
+    function showProgress(info){
+      document.getElementsByClassName("progress-modal")[0].classList.add("active");
+      document.getElementsByClassName("progress-modal")[0].innerText = info;
+    }
+
+    function hideProgress(){
+      document.getElementsByClassName("progress-modal")[0].classList.remove("active");
+    }
+
+    async function listCameras(){
+      let cameraSelect = document.getElementById("select-camera");
+      cameras = await cameraEnhancer.getAllCameras();
+      for (let index = 0; index < cameras.length; index++) {
+        const camera = cameras[index];
+        cameraSelect.appendChild(new Option(camera.label,camera.deviceId));
+      }
     }
 
     async function startDetection() {
       cameraViewContainer.style.display = "block";
+      let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
+      let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
+      let width = parseInt(selectedResolution.split("x")[0]);
+      let height = parseInt(selectedResolution.split("x")[1]);
+      await cameraEnhancer.selectCamera(selectedCamera);
+      await cameraEnhancer.setResolution({width:width, height:height});
       await cameraEnhancer.open();
-      await router.startCapturing("RecognizeTextLines_Default");
     };
 
-    function readImage(){
-      document.getElementById("file").click();
-    }
-
-    function loadImageFromFile(){
-      let fileInput = document.getElementById("file");
-      let files = fileInput.files;
-      if (files.length == 0) {
-        return;
-      }
-      let file = files[0];
-      fileReader = new FileReader();
-      fileReader.onload = function(e){
-        let img = document.getElementById("image");
-        img.onload = function(){
-          capture(img);
-        }
-        img.src = e.target.result;
-      };
-      fileReader.onerror = function () {
-        console.warn('oops, something went wrong.');
-      };
-      fileReader.readAsDataURL(file);
-    }
-
-    async function capture(source){
-      let result = await router.capture(source,"RecognizeTextLines_Default");
-      console.log(result);
-    }
+    async function stopDetection() {
+      await cameraEnhancer.close();
+      cameraViewContainer.style.display = "none";
+    };
   </script>
 </body>
 </html>
