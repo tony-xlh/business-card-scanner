@@ -4,6 +4,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Business Card Scanner</title>
   <script type="text/javascript" src="vcf.js"></script>
+  <script type="text/javascript" src="utils.js"></script>
   <style>
     #enhancerUIContainer {
       display: none;
@@ -54,6 +55,11 @@
     .progress-modal.active {
       visibility: inherit;
     }
+
+    #image {
+      max-width: 320px;
+      width: 100%;
+    }
   </style>
 </head>
 <html>
@@ -77,7 +83,9 @@
     </label>
   </div>
   <button onclick="startDetection()">Start Detection</button>
-  <img id="image"/>
+  <div>
+    <img id="image"/>
+  </div>
   <div id="enhancerUIContainer">
     <div class="dce-video-container"></div>
     <button class="close-button">Close</button>
@@ -85,20 +93,20 @@
   <div class="modal progress-modal"></div>
   <script src="https://cdn.jsdelivr.net/npm/dynamsoft-capture-vision-bundle@2.6.1000/dist/dcv.bundle.js"></script>
   <script>
+    let previousDetectionResults = [];
     let dcvLicense = "DLS2eyJvcmdhbml6YXRpb25JRCI6IjIwMDAwMSJ9";
     let cameraViewContainer = document.getElementById("enhancerUIContainer")
     let router;
     let cameraEnhancer;
     let drawingLayer;
+    let processing = false;
+    let interval;
     init();
     async function init(){
       showProgress("Loading...");
       Dynamsoft.License.LicenseManager.initLicense(dcvLicense);
       Dynamsoft.Core.CoreModule.loadWasm(["DDN","DBR"]);
       router = await Dynamsoft.CVR.CaptureVisionRouter.createInstance();
-      const resultReceiver = new Dynamsoft.CVR.CapturedResultReceiver();
-      resultReceiver.onCapturedResultReceived = handleCapturedResult;
-      router.addResultReceiver(resultReceiver);
       let cameraView = await Dynamsoft.DCE.CameraView.createInstance(cameraViewContainer);
       drawingLayer = cameraView.createDrawingLayer();
       let newStyleId = Dynamsoft.DCE.DrawingStyleManager.createDrawingStyle({
@@ -119,7 +127,7 @@
       hideProgress();
     }
 
-    function showProgress(info){
+    function showProgress(info) {
       document.getElementsByClassName("progress-modal")[0].classList.add("active");
       document.getElementsByClassName("progress-modal")[0].innerText = info;
     }
@@ -138,6 +146,7 @@
     }
 
     async function startDetection() {
+      await stopDetection();
       cameraViewContainer.style.display = "block";
       let selectedCamera = cameras[document.getElementById("select-camera").selectedIndex];
       let selectedResolution = document.getElementById("select-resolution").selectedOptions[0].value;
@@ -146,17 +155,99 @@
       await cameraEnhancer.selectCamera(selectedCamera);
       await cameraEnhancer.setResolution({width:width, height:height});
       await cameraEnhancer.open();
-      router.startCapturing("DetectDocumentBoundaries_Default");
+      interval = setInterval(processFrame, 100);
     };
 
     async function stopDetection() {
-      router.stopCapturing();
+      clearInterval(interval);
+      processing = false;
       await cameraEnhancer.close();
       cameraViewContainer.style.display = "none";
+      previousDetectionResults = [];
+      drawingLayer.clearDrawingItems();
     };
 
-    function handleCapturedResult(result){
+    async function processFrame(){
+      if (processing == true) {
+        return;
+      }
+      processing = true;
+      let image = cameraEnhancer.fetchImage();
+      let result = await router.capture(image,"DetectDocumentBoundaries_Default");
       console.log(result);
+      for (let index = 0; index < result.items.length; index++) {
+        const detectionResult = result.items[index];
+        if (detectionResult.type ==  Dynamsoft.Core.EnumCapturedResultItemType.CRIT_DETECTED_QUAD) {
+          drawOverlay(detectionResult);
+          if (steady(detectionResult)) {
+            stopDetection();
+            appendCroppedFrame(image,detectionResult);
+          }
+        }
+        break;
+      }
+      processing = false;
+    }
+
+    async function appendCroppedFrame(image,detectionResult){
+      let normalized = await normalizedImage(image,detectionResult.location.points);
+      let viewer = document.getElementById("documentViewer");
+      document.getElementById("image").src = normalized.toCanvas().toDataURL();
+    }
+
+    async function normalizedImage(image,points){
+      let newSettings = await router.getSimplifiedSettings("NormalizeDocument_Default");
+      newSettings.roiMeasuredInPercentage = 0;
+      newSettings.roi.points = points;
+      await router.updateSettings("NormalizeDocument_Default", newSettings);
+      let normalizeResult = await router.capture(image, "NormalizeDocument_Default");
+      if (normalizeResult.items[0]) {
+        return normalizeResult.items[0];
+      }else{
+        return null;
+      }
+    }
+
+    function drawOverlay(detectionResult,layer){
+      let layerToDraw = layer ?? drawingLayer;
+      layerToDraw.clearDrawingItems();
+      let quadItem = new Dynamsoft.DCE.QuadDrawingItem(
+        {points:detectionResult.location.points}
+      );
+      layerToDraw.addDrawingItem(quadItem);
+    }
+
+    function steady(detectionResult){
+      if (previousDetectionResults.length < 5) {
+        previousDetectionResults.push(detectionResult);
+        return false;
+      }else{
+        let smallIoU = false;
+        for (let i = 0; i < previousDetectionResults.length; i++) {
+          if (smallIoU) {
+            break;
+          }
+          const result1 = previousDetectionResults[i];
+          for (let j = 0; j < previousDetectionResults.length; j++) {
+            if (i == j) {
+              continue;
+            }
+            const result2 = previousDetectionResults[j];
+            let iou = intersectionOverUnion(result1.location.points,result2.location.points);
+            if (iou < 0.9) {
+              smallIoU = true;
+              break;
+            }
+          }
+        }
+        if (smallIoU) {
+          previousDetectionResults.splice(0,1);
+          previousDetectionResults.push(detectionResult);
+          return false;
+        }else{
+          return true;
+        }
+      }
     }
   </script>
 </body>
